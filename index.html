@@ -1,0 +1,164 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Attrition Prediction</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; line-height: 1.4; }
+    h1 { margin-bottom: 4px; }
+    .sub { color:#6b7280; font-size: 14px; margin-bottom: 16px; }
+    .grid { display:grid; gap:16px; grid-template-columns: repeat(auto-fit, minmax(320px,1fr)); }
+    .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,.04); }
+    button { padding: 8px 14px; border-radius: 10px; border: 1px solid #e5e7eb; background: #111827; color: #fff; cursor: pointer; }
+    button[disabled] { opacity:.5; cursor:not-allowed; }
+    input[type="file"] { padding:6px }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #e5e7eb; padding: 6px 8px; text-align: center; }
+    progress { width:100%; height:14px; }
+    #logs { white-space: pre-wrap; max-height: 260px; overflow:auto; background:#0b1020; color:#e5e7eb; padding:12px; border-radius:8px; }
+    .metric { font-weight:600 }
+    .small { font-size:12px; color:#6b7280 }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#eef2ff; color:#3730a3; font-size:12px }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center }
+  </style>
+</head>
+<body>
+  <h1>Attrition Prediction</h1>
+  <div class="sub">Upload IBM HR Attrition CSV → run EDA → train GRU (single timestep) in-browser → view metrics, download predictions.</div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>1) Data & EDA</h3>
+      <input id="csvFile" type="file" accept=".csv,text/csv" />
+      <div style="margin-top:8px">
+        <label>Test split (%)</label>
+        <input id="testSplit" type="number" min="10" max="50" value="20" style="width:64px;margin-left:6px" />
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="prepBtn" disabled>Prepare Dataset</button>
+        <button id="edaBtn" disabled>Run EDA</button>
+        <span class="pill" id="dataStatus">No data</span>
+      </div>
+      <div id="edaText" class="small" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      <h3>2) Train</h3>
+      <div class="row">
+        <div><label>Epochs</label><br/><input id="epochs" type="number" value="30" min="1" max="300" style="width:90px"/></div>
+        <div><label>Batch</label><br/><input id="batchSize" type="number" value="32" min="1" max="512" style="width:90px"/></div>
+        <div><label>LR</label><br/><input id="lr" type="number" value="0.001" step="0.0001" style="width:110px"/></div>
+        <div><label>GRU units</label><br/><input id="units" type="number" value="64" min="8" max="256" style="width:110px"/></div>
+        <div><label>GRU layers</label><br/><input id="layers" type="number" value="1" min="1" max="3" style="width:90px"/></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="buildBtn" disabled>Build Model</button>
+        <button id="trainBtn" disabled>Train</button>
+        <button id="evalBtn" disabled>Evaluate</button>
+        <button id="saveBtn" disabled>Save Weights</button>
+        <button id="loadBtn">Load Weights</button>
+        <button id="resetBtn">Reset</button>
+      </div>
+      <div style="margin-top:10px">
+        <progress id="prog" value="0" max="1"></progress>
+        <div class="small">Progress</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>3) Metrics & Export</h3>
+      <div>Binary Accuracy: <span class="metric" id="mAcc">–</span></div>
+      <div>Precision: <span class="metric" id="mPrec">–</span></div>
+      <div>Recall: <span class="metric" id="mRec">–</span></div>
+      <div>F1: <span class="metric" id="mF1">–</span></div>
+      <div>ROC AUC: <span class="metric" id="mAUC">–</span></div>
+      <div class="row" style="margin-top:10px">
+        <label class="small">Threshold</label>
+        <input id="thr" type="number" min="0.10" max="0.90" step="0.01" value="0.50" style="width:90px">
+        <button id="thrAuto">Max F1</button>
+        <button id="downloadBtn" disabled>Download Predictions</button>
+      </div>
+      <h4 style="margin-top:12px">Confusion Matrix (Test)</h4>
+      <table>
+        <thead><tr><th></th><th>Pred 0</th><th>Pred 1</th></tr></thead>
+        <tbody>
+          <tr><td>True 0</td><td id="cmTN">–</td><td id="cmFP">–</td></tr>
+          <tr><td>True 1</td><td id="cmFN">–</td><td id="cmTP">–</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top:16px">
+    <div class="card">
+      <h3>EDA Charts</h3>
+      <canvas id="classBalance" height="220"></canvas>
+      <canvas id="overtimeRate" height="220" style="margin-top:16px"></canvas>
+      <canvas id="topCorr" height="220" style="margin-top:16px"></canvas>
+    </div>
+    <div class="card">
+      <h3>Logs</h3>
+      <div id="logs"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { DataLoader } from './data-loader.js';
+    import { GRUClassifier } from './gru.js';
+    import { App } from './app.js';
+
+    const dl = new DataLoader({log: logLine});
+    const model = new GRUClassifier({log: logLine});
+
+    const app = new App({ tf, Chart, dl, model, ui: {
+      csvFile: document.getElementById('csvFile'),
+      prepBtn: document.getElementById('prepBtn'),
+      edaBtn: document.getElementById('edaBtn'),
+      buildBtn: document.getElementById('buildBtn'),
+      trainBtn: document.getElementById('trainBtn'),
+      evalBtn: document.getElementById('evalBtn'),
+      saveBtn: document.getElementById('saveBtn'),
+      loadBtn: document.getElementById('loadBtn'),
+      resetBtn: document.getElementById('resetBtn'),
+      testSplit: document.getElementById('testSplit'),
+      epochs: document.getElementById('epochs'),
+      batchSize: document.getElementById('batchSize'),
+      lr: document.getElementById('lr'),
+      units: document.getElementById('units'),
+      layers: document.getElementById('layers'),
+      prog: document.getElementById('prog'),
+      dataStatus: document.getElementById('dataStatus'),
+      // metrics + cm
+      elAcc: document.getElementById('mAcc'),
+      elPrec: document.getElementById('mPrec'),
+      elRec: document.getElementById('mRec'),
+      elF1: document.getElementById('mF1'),
+      elAUC: document.getElementById('mAUC'),
+      cmTN: document.getElementById('cmTN'),
+      cmFP: document.getElementById('cmFP'),
+      cmFN: document.getElementById('cmFN'),
+      cmTP: document.getElementById('cmTP'),
+      // charts
+      chartClassBalance: document.getElementById('classBalance'),
+      chartOvertime: document.getElementById('overtimeRate'),
+      chartCorr: document.getElementById('topCorr'),
+      edaText: document.getElementById('edaText'),
+      // export + threshold
+      downloadBtn: document.getElementById('downloadBtn'),
+      thr: document.getElementById('thr'),
+      thrAuto: document.getElementById('thrAuto')
+    }});
+
+    function logLine(msg) {
+      const el = document.getElementById('logs');
+      const t = new Date().toLocaleTimeString();
+      el.textContent += `[${t}] ${msg}\n`;
+      el.scrollTop = el.scrollHeight;
+    }
+  </script>
+</body>
+</html>
